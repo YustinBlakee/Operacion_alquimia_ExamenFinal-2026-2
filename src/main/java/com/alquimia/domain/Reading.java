@@ -6,16 +6,14 @@ import static com.alquimia.domain.AlquimiaException.Code.INVALID_DATA;
 /** Instantanea inmutable de los datos completos de un dispositivo. */
 public record Reading(Device device, double distance, List<String> message) {
     public Reading {
-        if (device == null || !Double.isFinite(distance) || distance < 0 || distance > 1_000_000_000) {
-            throw new AlquimiaException(INVALID_DATA, "La distancia debe estar entre 0 y 1000000000 y ser finita.");
+        if (device == null || !Double.isFinite(distance) || distance < 0) {
+            throw new AlquimiaException(INVALID_DATA, "El dispositivo es obligatorio y la distancia debe ser finita y no negativa.");
         }
-        if (message == null || message.isEmpty() || message.size() > 1000) {
-            throw new AlquimiaException(INVALID_DATA, "El mensaje debe contener entre 1 y 1000 posiciones.");
+        if (message == null) {
+            throw new AlquimiaException(INVALID_DATA, "El fragmento del mensaje es obligatorio; use un arreglo vacio si no se recibieron palabras.");
         }
-        if (message.stream().anyMatch(word -> word == null || word.length() > 100
-            || (!word.isEmpty() && word.codePoints().anyMatch(Character::isWhitespace)))) {
-            throw new AlquimiaException(INVALID_DATA,
-                "Cada posicion debe contener una palabra de hasta 100 caracteres o una cadena vacia.");
+        if (message.stream().anyMatch(word -> word == null)) {
+            throw new AlquimiaException(INVALID_DATA, "Las posiciones del mensaje no pueden ser nulas; use una cadena vacia para palabras ausentes.");
         }
         message = List.copyOf(message);
     }

@@ -41,7 +41,8 @@ class IntelligenceServiceTest {
     @Test
     void concurrentPatchesToSeparateFieldsAreNotLost() throws Exception {
         service.register(new Reading(Device.CCPD, 1, List.of("inicial")));
-        try (var executor = Executors.newFixedThreadPool(2)) {
+        var executor = Executors.newFixedThreadPool(2);
+        try {
             for (int i = 0; i < 100; i++) {
                 service.replace(new Reading(Device.CCPD, 1, List.of("inicial")));
                 CountDownLatch start = new CountDownLatch(1);
@@ -52,6 +53,11 @@ class IntelligenceServiceTest {
                 message.get(10, TimeUnit.SECONDS);
                 assertThat(service.find(Device.CCPD)).isEqualTo(new Reading(Device.CCPD, 2, List.of("final")));
             }
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS))
+                .as("Los trabajadores de la prueba deben terminar")
+                .isTrue();
         }
     }
 }

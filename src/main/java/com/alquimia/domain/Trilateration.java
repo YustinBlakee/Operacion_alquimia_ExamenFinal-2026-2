@@ -7,15 +7,25 @@ import static com.alquimia.domain.AlquimiaException.Code.INCONSISTENT_DISTANCES;
 final class Trilateration {
     private static final int MAX_ITERATIONS = 20;
     private static final int MAX_BACKTRACKS = 16;
-    private static final double NUMERICAL_TARGET_SQUARED = 1e-14;
+    private final double distanceTolerance;
+    private final double numericalTargetSquared;
+
+    Trilateration(double distanceTolerance) {
+        if (!Double.isFinite(distanceTolerance) || distanceTolerance <= 0) {
+            throw new IllegalArgumentException("La tolerancia de distancia debe ser finita y mayor que cero.");
+        }
+        this.distanceTolerance = distanceTolerance;
+        double numericalTarget = Math.min(1e-7, distanceTolerance / 10);
+        numericalTargetSquared = numericalTarget * numericalTarget;
+    }
 
     Position locate(List<Reading> readings) {
         Position result = refine(linearEstimate(readings), readings);
         for (Reading reading : readings) {
             double residual = distance(result, reading.device().position()) - reading.distance();
-            if (!Double.isFinite(residual) || Math.abs(residual) > IntelligenceProcessor.DISTANCE_TOLERANCE) {
+            if (!Double.isFinite(residual) || Math.abs(residual) > distanceTolerance) {
                 throw new AlquimiaException(INCONSISTENT_DISTANCES,
-                    "Las distancias no corresponden a una misma ubicacion (tolerancia: 0.01 unidades).");
+                    "No se encontro una ubicacion finita compatible con las distancias (tolerancia: " + distanceTolerance + " unidades).");
             }
         }
         return result;
@@ -44,7 +54,7 @@ final class Trilateration {
     private Position refine(Position estimate, List<Reading> readings) {
         Position current = estimate;
         double error = squaredError(current, readings);
-        for (int iteration = 0; iteration < MAX_ITERATIONS && error > NUMERICAL_TARGET_SQUARED; iteration++) {
+        for (int iteration = 0; iteration < MAX_ITERATIONS && error > numericalTargetSquared; iteration++) {
             Position step = gaussNewtonStep(current, readings);
             if (step == null || !Double.isFinite(step.x()) || !Double.isFinite(step.y())) break;
             boolean improved = false;

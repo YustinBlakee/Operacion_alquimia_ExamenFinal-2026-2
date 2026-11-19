@@ -41,7 +41,8 @@ class IntelligenceProcessorTest {
     @ParameterizedTest(name = "Reconstruye ({0}, {1})")
     @CsvSource({"0,0", "100,-100", "500,100", "-0.0001,0.0002", "1000000,-1000000",
         "100000000,100000000", "-100000000,100000000", "100000000,-100000000",
-        "500000000,300000000", "-500000000,-300000000", "999999000,0", "0,-999999000"})
+        "500000000,300000000", "-500000000,-300000000", "999999000,0", "0,-999999000",
+        "1100000000,0", "2000000000,3000000000"})
     void locatesAcrossTheSupportedRangeWithoutRejectingValidDistances(double x, double y) {
         List<Reading> readings = complete(x, y);
         IntelligenceResult result = processor.process(readings);
@@ -105,20 +106,22 @@ class IntelligenceProcessorTest {
             reading(Device.STAR_LABS, 0, 0, List.of("hola")),
             reading(Device.CCPD, 0, 0, List.of("adios")),
             reading(Device.STAR_SATELLITE, 0, 0, List.of("")))));
-        assertCode(INVALID_DATA, () -> processor.process(List.of(
+        assertThat(processor.process(List.of(
             reading(Device.STAR_LABS, 0, 0, List.of("hola")),
             reading(Device.CCPD, 0, 0, List.of("hola", "mundo")),
-            reading(Device.STAR_SATELLITE, 0, 0, List.of("")))));
+            reading(Device.STAR_SATELLITE, 0, 0, List.of("")))).message()).isEqualTo("hola mundo");
     }
 
     @Test
     void readingRejectsInvalidValuesAndDefensivelyCopiesMessage() {
-        for (double distance : new double[] {-1, Double.NaN, Double.POSITIVE_INFINITY, 1e10}) {
+        for (double distance : new double[] {-1, Double.NaN, Double.POSITIVE_INFINITY}) {
             assertCode(INVALID_DATA, () -> new Reading(Device.CCPD, distance, List.of("hola")));
         }
         assertCode(INVALID_DATA, () -> Reading.of(Device.CCPD, null, List.of("hola")));
-        assertCode(INVALID_DATA, () -> new Reading(Device.CCPD, 1, List.of("dos palabras")));
-        assertCode(INVALID_DATA, () -> new Reading(Device.CCPD, 1, List.of()));
+        assertCode(INVALID_DATA, () -> new Reading(Device.CCPD, 1, null));
+        assertCode(INVALID_DATA, () -> new Reading(Device.CCPD, 1, Collections.singletonList(null)));
+        assertThat(new Reading(Device.CCPD, 1e10, List.of("dos palabras")).distance()).isEqualTo(1e10);
+        assertThat(new Reading(Device.CCPD, 1, List.of()).message()).isEmpty();
         var words = new java.util.ArrayList<>(List.of("hola"));
         Reading reading = new Reading(Device.CCPD, 1, words);
         words.set(0, "cambiado");
@@ -129,6 +132,28 @@ class IntelligenceProcessorTest {
     private void assertCode(AlquimiaException.Code code, org.assertj.core.api.ThrowableAssert.ThrowingCallable operation) {
         assertThatThrownBy(operation).isInstanceOfSatisfying(AlquimiaException.class,
             error -> assertThat(error.code()).isEqualTo(code));
+    }
+
+    @Test
+    void toleranceIsConfigurableWithoutExpandingItSilently() {
+        var rounded = new ArrayList<>(complete(0, 0));
+        Reading original = rounded.get(0);
+        rounded.set(0, new Reading(original.device(), original.distance() + 0.001, original.message()));
+        assertDistances(new IntelligenceProcessor(0.01).process(rounded).position(), rounded);
+        assertCode(INCONSISTENT_DISTANCES, () -> new IntelligenceProcessor(1e-9).process(rounded));
+        assertThat(new IntelligenceProcessor(1e-9).process(complete(0, 0)).message())
+            .isEqualTo("laboratorio esta oculto");
+    }
+
+    @Test
+    void rejectsInvalidToleranceConfigurationAndNonRepresentableResults() {
+        for (double tolerance : new double[] {0, -1, Double.NaN, Double.POSITIVE_INFINITY}) {
+            assertThatThrownBy(() -> new IntelligenceProcessor(tolerance)).isInstanceOf(IllegalArgumentException.class);
+        }
+        assertCode(INCONSISTENT_DISTANCES, () -> processor.process(List.of(
+            new Reading(Device.STAR_LABS, Double.MAX_VALUE, List.of("hola")),
+            new Reading(Device.CCPD, Double.MAX_VALUE, List.of("hola")),
+            new Reading(Device.STAR_SATELLITE, Double.MAX_VALUE, List.of("hola")))));
     }
 
     private void assertDistances(Position result, List<Reading> readings) {

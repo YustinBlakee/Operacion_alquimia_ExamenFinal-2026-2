@@ -115,12 +115,12 @@ class ApiIntegrationTest {
             "{\"distance\":null,\"message\":[\"x\"]}", "{\"distance\":1,\"message\":[null]}",
             "{\"distance\":1,\"message\":[\"x\"],\"typo\":1}", "{\"distance\":\"abc\",\"message\":[\"x\"]}",
             "{\"distance\":\"1\",\"message\":[\"x\"]}", "{\"distance\":1,\"message\":[123]}",
-            "{\"distance\":1,\"message\":[true]}", "{\"distance\":1000000001,\"message\":[\"x\"]}"}) {
+            "{\"distance\":1,\"message\":[true]}"}) {
             assertThat(request("POST", "/readings/ccpd", body).statusCode()).as(body).isEqualTo(400);
         }
         assertThat(request("POST", "/readings/ccpd", "{\"distance\":1,\"message\":[\"original\"]}").statusCode()).isEqualTo(201);
         for (String body : new String[] {"{}", "{\"distance\":null}", "{\"message\":null}",
-            "{\"message\":[]}", "{\"distance\":-1}", "{\"typo\":1}",
+            "{\"distance\":-1}", "{\"typo\":1}",
             "{\"distance\":2,\"message\":null}", "{\"distance\":2,\"message\":[null]}"}) {
             assertThat(request("PATCH", "/readings/ccpd", body).statusCode()).as(body).isEqualTo(400);
         }
@@ -151,7 +151,7 @@ class ApiIntegrationTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"100000000,100000000", "500000000,300000000", "999999000,0"})
+    @CsvSource({"100000000,100000000", "500000000,300000000", "999999000,0", "1100000000,0"})
     void largeValidDistancesWorkOverHttp(double x, double y) throws Exception {
         ProcessingPayload input = complete(x, y);
         var response = request("POST", "/intelligence", json.writeValueAsString(input));
@@ -166,7 +166,7 @@ class ApiIntegrationTest {
     @ParameterizedTest
     @CsvSource({"missing,422,INSUFFICIENT_DATA", "duplicate,400,INVALID_DATA",
         "distances,422,INCONSISTENT_DISTANCES", "empty,422,INCOMPLETE_MESSAGE",
-        "conflict,422,CONFLICTING_MESSAGE", "alignment,400,INVALID_DATA"})
+        "conflict,422,CONFLICTING_MESSAGE", "alignment,422,CONFLICTING_MESSAGE"})
     void processingErrorsDoNotMutateStoredData(String scenario, int status, String code) throws Exception {
         assertThat(request("POST", "/readings/ccpd", "{\"distance\":1,\"message\":[\"original\"]}").statusCode()).isEqualTo(201);
         var devices = new java.util.ArrayList<>(complete(0, 0).devices());
@@ -195,6 +195,48 @@ class ApiIntegrationTest {
             };
             return new ReadingPayload(device.id(), Math.hypot(x - device.position().x(), y - device.position().y()), words);
         }).toList());
+    }
+
+    @Test
+    void unequalAndEmptyFragmentsWorkInBothProcessingPaths() throws Exception {
+        var original = complete(0, 0);
+        var devices = original.devices().stream().map(reading -> new ReadingPayload(reading.device(), reading.distance(),
+            switch (reading.device()) {
+                case "star-labs" -> List.of("el");
+                case "ccpd" -> List.of("", "laboratorio");
+                default -> List.of("", "", "oculto");
+            })).toList();
+        assertResult(request("POST", "/intelligence", json.writeValueAsString(new ProcessingPayload(devices))),
+            0, 0, "el laboratorio oculto", 1e-8);
+        for (var reading : devices) {
+            assertThat(request("POST", "/readings/" + reading.device(), json.writeValueAsString(
+                java.util.Map.of("distance", reading.distance(), "message", reading.message()))).statusCode()).isEqualTo(201);
+        }
+        assertResult(request("GET", "/intelligence", null), 0, 0, "el laboratorio oculto", 1e-8);
+        var cleared = request("PATCH", "/readings/star-labs", "{\"message\":[]}");
+        assertThat(cleared.statusCode()).isEqualTo(200);
+        assertThat(json.readValue(cleared.body(), ReadingPayload.class).message()).isEmpty();
+        assertProblem(request("GET", "/intelligence", null), 422, "INCOMPLETE_MESSAGE");
+        assertThat(request("PUT", "/readings/ccpd", """
+            {"distance":141.4213562373095,"message":["el","laboratorio"]}
+            """).statusCode()).isEqualTo(200);
+        assertResult(request("GET", "/intelligence", null), 0, 0, "el laboratorio oculto", 1e-8);
+    }
+
+    @Test
+    void acceptsInputsBeyondFormerArbitrarySizeLimits() throws Exception {
+        var words = new java.util.ArrayList<>(java.util.Collections.nCopies(1001, "palabra"));
+        words.set(0, "z".repeat(101));
+        words.set(1, "dos palabras");
+        var registered = request("POST", "/readings/ccpd", json.writeValueAsString(
+            java.util.Map.of("distance", 1e10, "message", words)));
+        assertThat(registered.statusCode()).isEqualTo(201);
+        assertThat(json.readValue(registered.body(), ReadingPayload.class))
+            .isEqualTo(new ReadingPayload("ccpd", 1e10, words));
+        var devices = complete(0, 0).devices().stream().map(reading -> new ReadingPayload(reading.device(),
+            reading.distance(), reading.device().equals("star-labs") ? words : List.<String>of())).toList();
+        assertResult(request("POST", "/intelligence", json.writeValueAsString(new ProcessingPayload(devices))),
+            0, 0, String.join(" ", words), 1e-8);
     }
 
     private IntelligenceResult assertResult(HttpResponse<String> response, double x, double y, String message, double tolerance) {

@@ -1,0 +1,7 @@
+{
+  "devices": [
+    { "device": "star-labs", "distance": 538.5164807134504, "message": ["el"] },
+    { "device": "ccpd", "distance": 141.4213562373095, "message": ["", "laboratorio"] },
+    { "device": "star-satellite", "distance": 509.9019513592785, "message": ["", "", "oculto"] }
+  ]
+}

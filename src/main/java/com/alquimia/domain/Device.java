@@ -1,6 +1,7 @@
 package com.alquimia.domain;
 
 import java.util.Arrays;
+import java.util.Locale;
 import static com.alquimia.domain.AlquimiaException.Code.*;
 
 public enum Device {
@@ -16,8 +17,19 @@ public enum Device {
     public Position position() { return position; }
 
     public static Device fromId(String id) {
-        return Arrays.stream(values()).filter(device -> device.id.equals(id)).findFirst()
+        String normalized = normalize(id);
+        return Arrays.stream(values()).filter(device -> normalize(device.id).equals(normalized)).findFirst()
             .orElseThrow(() -> new AlquimiaException(UNKNOWN_DEVICE,
                 "Dispositivo desconocido. Use star-labs, ccpd o star-satellite."));
+    }
+
+    private static String normalize(String id) {
+        if (id == null) return "";
+        StringBuilder normalized = new StringBuilder();
+        id.toLowerCase(Locale.ROOT).codePoints()
+            .filter(character -> character != '-' && character != '_' && character != '.'
+                && !Character.isWhitespace(character) && !Character.isSpaceChar(character))
+            .forEach(normalized::appendCodePoint);
+        return normalized.toString();
     }
 }
