@@ -1,0 +1,13 @@
+package com.alquimia;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class OperacionAlquimiaApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(OperacionAlquimiaApplication.class, args);
+	}
+
+}
