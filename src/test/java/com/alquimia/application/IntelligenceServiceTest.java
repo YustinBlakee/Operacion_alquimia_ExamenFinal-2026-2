@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.*;
 
 class IntelligenceServiceTest {
@@ -47,8 +48,8 @@ class IntelligenceServiceTest {
                 var distance = executor.submit(() -> { start.await(); return service.update(Device.CCPD, 2.0, null); });
                 var message = executor.submit(() -> { start.await(); return service.update(Device.CCPD, null, List.of("final")); });
                 start.countDown();
-                distance.get();
-                message.get();
+                distance.get(10, TimeUnit.SECONDS);
+                message.get(10, TimeUnit.SECONDS);
                 assertThat(service.find(Device.CCPD)).isEqualTo(new Reading(Device.CCPD, 2, List.of("final")));
             }
         }

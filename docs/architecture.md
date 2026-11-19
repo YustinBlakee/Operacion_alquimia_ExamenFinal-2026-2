@@ -15,6 +15,8 @@ El contexto delimitado es la reconstrucción de inteligencia de vigilancia. No s
 
 `Position` e `IntelligenceResult` son objetos de valor inmutables. `IntelligenceProcessor` es un servicio de dominio porque la trilateración y la combinación de tres fragmentos involucran varias lecturas y no pertenecen a una lectura individual.
 
+`Trilateration` encapsula exclusivamente el cálculo y refinamiento numérico de la posición. Es un colaborador interno del dominio, sin anotaciones de Spring, acceso a HTTP ni almacenamiento.
+
 El modelo evita componentes artificiales para este dominio pequeño. No requiere persistencia, ORM, eventos distribuidos ni múltiples contextos delimitados.
 
 ## Puertos y adaptadores
@@ -47,6 +49,17 @@ IntelligenceProcessor      ReadingRepository             dominio / puerto de sal
 
 La dependencia de código apunta hacia el núcleo. El servicio de aplicación conoce la interfaz `ReadingRepository`, y Spring le entrega su implementación al arrancar.
 
+```mermaid
+flowchart LR
+    HTTP[Cliente HTTP] --> Controller[Adaptador REST]
+    Controller --> In[Puerto de entrada: IntelligenceUseCases]
+    In --> Service[IntelligenceService]
+    Service --> Processor[IntelligenceProcessor]
+    Processor --> Math[Trilateration]
+    Service --> Out[Puerto de salida: ReadingRepository]
+    Memory[Adaptador en memoria] -. implementa .-> Out
+```
+
 ## Consistencia
 
 Las lecturas y sus mensajes son inmutables; el repositorio entrega listas copiadas. Sus operaciones se sincronizan para comprobar existencia y mutar en una misma sección crítica. PATCH lee el valor anterior, combina campos y valida antes de guardar, bajo el mismo bloqueo: dos actualizaciones concurrentes de campos diferentes no pierden cambios.
@@ -57,7 +70,19 @@ Un PATCH inválido deja intacta la lectura anterior. PUT, PATCH y DELETE solo af
 
 Cada dispositivo define un círculo `(x-xi)^2 + (y-yi)^2 = di^2`. Restar el primer círculo de los otros dos elimina los términos cuadráticos y produce un sistema de dos ecuaciones lineales. Las tres posiciones fijas no son colineales, por lo que su determinante es distinto de cero.
 
-Una solución del sistema lineal no garantiza por sí sola satisfacer los tres círculos. Por eso se calcula la distancia desde el resultado a cada dispositivo y se rechazan residuos mayores a 0,01 unidades. Las operaciones usan `double`, con límites de entrada que evitan desbordamiento al elevar distancias al cuadrado.
+Una solución del sistema lineal no garantiza por sí sola satisfacer los tres círculos. El cálculo anterior restaba directamente distancias al cuadrado; a gran escala esa operación perdía precisión y podía rechazar datos válidos.
+
+La versión corregida:
+
+1. Calcula `d1² - d2²` como `(d1 - d2) * (d1 + d2)` para reducir la cancelación numérica.
+2. Obtiene una estimación inicial con el sistema lineal y `Math.fma`.
+3. Refina los residuos de las distancias mediante pasos de Gauss-Newton, con retroceso si un paso no mejora el error. Los pasos se resuelven por QR con rotaciones de Givens, sin formar las ecuaciones normales `JᵀJ`.
+4. Limita el trabajo a 20 iteraciones y 16 intentos de retroceso por iteración.
+5. Valida las tres distancias por separado y solo acepta residuos finitos de como máximo 0,01 unidades. Si no se encuentra una posición compatible, informa `INCONSISTENT_DISTANCES`.
+
+Este refinamiento mejora la precisión sin ampliar la tolerancia ni ocultar datos incompatibles. Las operaciones usan `double`; el límite de entrada evita desbordamientos. La tolerancia controla las distancias reconstruidas. La precisión de las coordenadas también depende de la geometría: cuando el objetivo está muy lejos del conjunto de sensores, la incertidumbre angular aumenta.
+
+Referencias del método: [NIST: iteración de Gauss-Newton](https://www.nist.gov/publications/fitting-natures-basic-functions-part-iii-exponentials-sinusoids-and-nonlinear-least) y [LAPACK: factorizaciones ortogonales para mínimos cuadrados](https://www.netlib.org/lapack/lug/node39.html).
 
 ## Cobertura del enunciado
 
@@ -76,3 +101,5 @@ Una solución del sistema lineal no garantiza por sí sola satisfacer los tres c
 - Aplicación y repositorio: aislamiento entre dispositivos, PUT frente a PATCH, rechazo sin mutación y actualizaciones concurrentes.
 - HTTP: servidor real con puerto aleatorio, procesamiento completo sin efectos de almacenamiento, ciclo de registro/procesamiento/actualización/eliminación, estados, Location y errores de contrato.
 - Portabilidad: Maven Wrapper para ambos tipos de shell, compilación Java 21 y matriz CI de tres sistemas y dos JDK. Las verificaciones locales se informan por separado de la configuración de CI.
+
+La suite contiene 39 pruebas ejecutables. El [procedimiento de verificación](verification.md) relaciona las seis funcionalidades con los endpoints y las clases de prueba y permite comprobarlas manualmente sin instalar herramientas adicionales al JDK y un cliente HTTP como curl.

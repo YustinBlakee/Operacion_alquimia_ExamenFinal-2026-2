@@ -1,7 +1,12 @@
 package com.alquimia.domain;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 import static org.assertj.core.api.Assertions.*;
 import static com.alquimia.domain.AlquimiaException.Code.*;
 
@@ -31,6 +36,48 @@ class IntelligenceProcessorTest {
         Position position = processor.process(complete(-500, -200)).position();
         assertThat(position.x()).isCloseTo(-500, within(1e-8));
         assertThat(position.y()).isCloseTo(-200, within(1e-8));
+    }
+
+    @ParameterizedTest(name = "Reconstruye ({0}, {1})")
+    @CsvSource({"0,0", "100,-100", "500,100", "-0.0001,0.0002", "1000000,-1000000",
+        "100000000,100000000", "-100000000,100000000", "100000000,-100000000",
+        "500000000,300000000", "-500000000,-300000000", "999999000,0", "0,-999999000"})
+    void locatesAcrossTheSupportedRangeWithoutRejectingValidDistances(double x, double y) {
+        List<Reading> readings = complete(x, y);
+        IntelligenceResult result = processor.process(readings);
+        double range = Math.hypot(x, y);
+        // La incertidumbre angular crece con la distancia y la precision de las entradas double.
+        double coordinateTolerance = Math.max(1e-6, 16 * Math.ulp(range) * range / 100);
+        assertThat(result.position().x()).isCloseTo(x, within(coordinateTolerance));
+        assertThat(result.position().y()).isCloseTo(y, within(coordinateTolerance));
+        assertDistances(result.position(), readings);
+    }
+
+    @Test
+    void reconstructsDeterministicSamplesAtDifferentScalesAndArrivalOrders() {
+        Random random = new Random(20261119L);
+        for (int i = 0; i < 250; i++) {
+            double radius = Math.pow(10, random.nextDouble() * 9) * 0.99;
+            double angle = random.nextDouble() * Math.PI * 2;
+            var readings = new ArrayList<>(complete(radius * Math.cos(angle), radius * Math.sin(angle)));
+            Collections.shuffle(readings, random);
+            IntelligenceResult result = processor.process(readings);
+            assertDistances(result.position(), readings);
+            assertThat(result.message()).isEqualTo("laboratorio esta oculto");
+        }
+    }
+
+    @Test
+    void acceptsSmallRoundingButStillRejectsContradictoryLargeDistances() {
+        var rounded = new ArrayList<>(complete(0, 0));
+        Reading original = rounded.get(0);
+        rounded.set(0, new Reading(original.device(), original.distance() + 0.001, original.message()));
+        assertDistances(processor.process(rounded).position(), rounded);
+
+        var inconsistent = new ArrayList<>(complete(100_000_000, 100_000_000));
+        Reading altered = inconsistent.get(0);
+        inconsistent.set(0, new Reading(altered.device(), altered.distance() + 10_000, altered.message()));
+        assertCode(INCONSISTENT_DISTANCES, () -> processor.process(inconsistent));
     }
 
     @Test
@@ -82,5 +129,14 @@ class IntelligenceProcessorTest {
     private void assertCode(AlquimiaException.Code code, org.assertj.core.api.ThrowableAssert.ThrowingCallable operation) {
         assertThatThrownBy(operation).isInstanceOfSatisfying(AlquimiaException.class,
             error -> assertThat(error.code()).isEqualTo(code));
+    }
+
+    private void assertDistances(Position result, List<Reading> readings) {
+        for (Reading reading : readings) {
+            Position sensor = reading.device().position();
+            assertThat(Math.hypot(result.x() - sensor.x(), result.y() - sensor.y()))
+                .as("Distancia de %s", reading.device())
+                .isCloseTo(reading.distance(), within(IntelligenceProcessor.DISTANCE_TOLERANCE));
+        }
     }
 }
